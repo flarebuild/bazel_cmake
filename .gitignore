@@ -1,0 +1,7 @@
+bazel-*
+.idea
+tool/cmake_gen/target
+example/cmake_gen
+example/cmake-build-debug
+tools/cmake_gen/target
+.vscode

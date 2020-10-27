@@ -1,0 +1,8 @@
+cc_library(
+    name = "libb",
+    srcs = [ "libb.cpp" ],
+    hdrs = [ "libb.hpp" ],
+    deps = [ "@org_boost//:uuid" ],
+    visibility = ["//visibility:public"],
+    copts = [ "-std=c++2a" ],
+)

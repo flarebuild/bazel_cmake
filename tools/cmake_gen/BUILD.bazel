@@ -1,0 +1,22 @@
+load("@blackjack//:blackjack.bzl", "blackjack")
+load("@io_bazel_rules_rust//rust:rust.bzl", "rust_binary")
+
+blackjack(
+    name = "blackjack",
+    manifest = "Cargo.toml",
+)
+
+rust_binary(
+    name = "cmake_gen",
+    srcs = ["src/main.rs"],
+    edition = "2018",
+    deps = [
+        "@crates_io_pico_args//:pico_args",
+        "@crates_io_serde_json//:serde_json",
+        "@crates_io_serde//:serde",
+    ],
+    tags = [
+        "local",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,11 @@
+cc_binary(
+    name = "bin",
+    srcs = [ "bin.cpp" ],
+    deps = [
+        "//example/liba",
+        "//example/libb",
+    ],
+    visibility = ["//visibility:public"],
+    copts = [ "-std=c++2a" ],
+    linkstatic = False,
+)
