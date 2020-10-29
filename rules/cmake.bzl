@@ -3,6 +3,7 @@ def _cmake_gen_impl(ctx):
     substitutions = {
         "{TOOL}": ctx.executable._tool.short_path,
         "{NAME}": ctx.attr.name,
+        "{LINKSTATIC}": "true" if ctx.attr.linkstatic else "false",
     }
 
     if not len(ctx.attr.package):
@@ -30,6 +31,9 @@ _cmake_gen = rule(
     attrs = {
         "package": attr.string(
             mandatory = True,
+        ),
+        "linkstatic": attr.bool(
+            default = True,
         ),
         "config": attr.string(
             mandatory = False,

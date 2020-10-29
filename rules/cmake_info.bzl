@@ -3,6 +3,7 @@ load("@bazel_skylib//lib:sets.bzl", "sets")
 _LibInfo = provider(
     fields = [
         "shared",
+        "static",
         "link_whole",
     ],
 )
@@ -40,6 +41,7 @@ def _get_libs(target, ctx):
             if lib.dynamic_library and lib.dynamic_library.owner == target.label:
                 result.append(_LibInfo(
                     shared = lib.dynamic_library,
+                    static = lib.static_library if lib.static_library else lib.pic_static_library,
                     link_whole = lib.alwayslink,
                 ))
     return result
@@ -141,7 +143,8 @@ def cmake_info_to_json(ci, ctx):
         "deps": [ str(d) for d in ci.deps ],
         "libs": [
             struct(
-                shared = l.shared.path,
+                shared_lib = l.shared.path,
+                static_lib = l.static.path,
                 link_whole = l.link_whole,
             ) for l in ci.libs
         ],

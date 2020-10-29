@@ -146,7 +146,8 @@ struct BazelInfo {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct LibInfo {
-    shared: String,
+    shared_lib: String,
+    static_lib: String,
     link_whole: bool,
 }
 
@@ -258,9 +259,16 @@ fn get_cmake_infos(
     let mut cmd = base_cmd
         .arg("build")
         .args(targets.iter());
+
+    let aspect = if args.link_static {
+        "cmake_info_aspect_static"
+    } else {
+        "cmake_info_aspect_dynamic"
+    };
+
     cmd = cmd
         .arg("--aspects")
-        .arg("@build_flare_bazel_cmake//rules:cmake_info_aspect.bzl%cmake_info_aspect");
+        .arg(format!("@build_flare_bazel_cmake//rules:cmake_info_aspect.bzl%{}", aspect));
 
     if compile {
         cmd = cmd.arg("--output_groups=cmake_info_json,cmake_libs,cmake_gen_hdrs");
@@ -340,7 +348,7 @@ fn unwrap_include_path(label: &Label, inpath: &str, bazel_info: &BazelInfo) -> R
     Ok(path.canonicalize()?)
 }
 
-fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, bazel_info: &BazelInfo, is_external: bool) -> Result<Vec<String>> {
+fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &BazelInfo, is_external: bool) -> Result<Vec<String>> {
     let mut res = Vec::new();
     for info in infos.into_iter() {
         println!("Processing target: {}", &info.label);
@@ -368,7 +376,13 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, bazel_info: &BazelInfo, is_e
         } else if info.is_executable {
             writeln!(f, "add_executable({})\n", &cmake_name)?;
         } else {
-            writeln!(f, "add_library({} SHARED)\n", &cmake_name)?;
+            writeln!(
+                f,
+                "add_library({} {})\n",
+                &cmake_name,
+                if args.link_static { "STATIC" }
+                else { "SHARED" }
+            )?;
         }
 
         if !info.deps.is_empty() || !info.link_flags.is_empty() || (is_interface && !info.libs.is_empty()) {
@@ -381,11 +395,27 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, bazel_info: &BazelInfo, is_e
             }
             if is_interface {
                 for lib in info.libs.iter() {
-                    let out_lib = out_dir.join(format!("lib{}.so", &label.name));
-                    println!("Copying lib: {}", &lib.shared);
-                    fs::copy(&lib.shared, &out_lib)?;
-                    change_rpath(out_lib, &lib.shared)?;
-                    writeln!(f, "    ${{CMAKE_CURRENT_LIST_DIR}}/lib{}.so",  &label.name)?;
+                    let lib_name = format!(
+                        "lib{}.{}",
+                        &label.name,
+                        if args.link_static { "a" }
+                        else { "so" }
+                    );
+                    let out_lib = out_dir.join(&lib_name);
+                    println!("Copying lib: {}", if args.link_static {&lib.static_lib} else {&lib.shared_lib});
+                    if args.link_static {
+                        fs::hard_link(&lib.static_lib, &out_lib)?;
+                    } else {
+                        fs::copy(&lib.shared_lib, &out_lib)?;
+                        change_rpath(out_lib, &lib.shared_lib)?;
+                    }
+                    writeln!(
+                        f,
+                        "    {}${{CMAKE_CURRENT_LIST_DIR}}/{}",
+                        if lib.link_whole { "-Wl,-force_load," }
+                        else { " "},
+                        &lib_name
+                    )?;
                 }
             }
             writeln!(f, ")\n")?;
@@ -488,6 +518,7 @@ struct Args {
     package: Option<String>,
     name: String,
     config: Option<String>,
+    link_static: bool,
 }
 
 fn main() -> Result<()> {
@@ -499,6 +530,7 @@ fn main() -> Result<()> {
         package: args.opt_value_from_str("-p")?,
         name: args.value_from_str("-n")?,
         config: args.opt_value_from_str("-c")?,
+        link_static: args.value_from_str("-l")?,
     };
     let bazel_info = get_bazel_info(&args)?;
 
@@ -517,7 +549,7 @@ fn main() -> Result<()> {
 
     let targets_deps = query_cc_targets_deps(&args)?;
     let deps_infos =  get_cmake_infos(&targets_deps, &args, &bazel_info, true)?;
-    let deps_gen = gen_libs(&cmake_dir, deps_infos, &bazel_info, true)?;
+    let deps_gen = gen_libs(&cmake_dir, deps_infos, &args, &bazel_info, true)?;
     let all_deps_gen_file = PathBuf::new()
         .join(&cmake_dir)
         .join("all_deps.cmake");
@@ -525,7 +557,7 @@ fn main() -> Result<()> {
 
     let targets = query_cc_targets(&args)?;
     let infos = get_cmake_infos(&targets, &args, &bazel_info, false)?;
-    let gen =  gen_libs(&cmake_dir, infos, &bazel_info, false)?;
+    let gen =  gen_libs(&cmake_dir, infos,  &args, &bazel_info, false)?;
     let all_gen_file = PathBuf::new()
         .join(&cmake_dir)
         .join("all.cmake");
