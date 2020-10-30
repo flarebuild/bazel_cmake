@@ -9,7 +9,7 @@ def _cmake_gen_impl(ctx):
     if not len(ctx.attr.package):
         substitutions.update({"{PACKAGE}": ""})
     else:
-        substitutions.update({"{PACKAGE}": "-p " + ctx.attr.package})
+        substitutions.update({"{PACKAGE}": "-p //" + ctx.attr.package})
 
     if not ctx.attr.config:
         substitutions.update({"{CONFIG}": ""})

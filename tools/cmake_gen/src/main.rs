@@ -3,7 +3,7 @@ use std::fs;
 use std::fmt;
 use std::result;
 use std::process::{Stdio, Command, Output};
-use std::collections::{HashSet, HashMap, BTreeMap};
+use std::collections::{HashSet, HashMap, BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{PathBuf};
@@ -125,16 +125,11 @@ fn query_cc_targets(args: &Args) -> Result<HashSet<String>> {
     Ok(res)
 }
 
-fn is_inside_package(dep: &str, package: &str) -> bool {
-    dep.starts_with(package)
-}
-
 fn query_cc_targets_deps(args: &Args) -> Result<HashSet<String>> {
     let pkg = unwrap_package(&args.package);
     let lookup = format!("kind(cc_library, deps({}...))", &pkg);
     let res: HashSet<String> = do_query_list(&lookup, args)?
         .into_iter()
-        .filter(|x| !is_inside_package(&x, &pkg))
         .collect();
     Ok(res)
 }
@@ -167,6 +162,7 @@ struct CmakeInfo {
     gen_srcs: BTreeMap<String, String>,
     is_executable: bool,
     include_prefix: Option<String>,
+    tags: HashSet<String>,
 }
 
 struct Label {
@@ -249,6 +245,15 @@ fn read_cmake_info(target: &str, bazel_info: &BazelInfo) -> Result<CmakeInfo> {
     Ok(CmakeInfo::deserialize(&mut de)?)
 }
 
+fn is_ignored(info: &CmakeInfo) -> bool {
+    info.tags.contains("cmake_ignore")
+}
+
+fn is_inside_package(dep: &str, package: &Option<String>) -> bool {
+    if package.is_none() { return false; }
+    dep.starts_with(package.as_ref().unwrap())
+}
+
 fn get_cmake_infos(
     targets: &HashSet<String>,
     args: &Args,
@@ -277,14 +282,25 @@ fn get_cmake_infos(
     }
 
     run_cmd(cmd, args)?;
-    let (res, errors): (Vec<_>, Vec<_>) = targets
+    let (res_wr, errors): (Vec<_>, Vec<_>) = targets
         .iter()
         .map(|x| read_cmake_info(&x, bazel_info))
         .partition(Result::is_ok);
 
     for err in errors { err?; }
 
-    Ok(res.into_iter().map(Result::unwrap).collect())
+    let res = res_wr
+        .into_iter()
+        .map(Result::unwrap)
+        .filter(|x| {
+            if compile {
+                is_ignored(x) || !is_inside_package(&x.label, &args.package)
+            } else {
+                ! is_ignored(x)
+            }
+        });
+
+    Ok(res.collect())
 }
 
 fn change_rpath(at: PathBuf, from: &str) -> Result<()> {
@@ -322,6 +338,9 @@ fn copy_gens(cmake_dir: &str, info: &CmakeInfo, is_interface: bool) -> Result<()
     };
     for (gen_rel, gen_src) in gens {
         let out_path = cmake_dir.join(gen_rel);
+        if out_path.exists() {
+            continue;
+        }
         if !out_path.parent().unwrap().exists() {
             fs::create_dir_all(out_path.parent().unwrap())?;
         }
@@ -493,23 +512,23 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
     Ok(res)
 }
 
-fn write_deps(includes: Vec<String>, to: PathBuf, gen_dir_name: &str) -> Result<()> {
+fn write_deps(includes: Vec<String>, to: PathBuf) -> Result<()> {
     let cmake_file = fs::File::create(&to)?;
     let mut f = BufWriter::new(cmake_file);
     writeln!(f, "include_directories(${{CMAKE_CURRENT_LIST_DIR}})")?;
     for inc in includes.into_iter() {
-        writeln!(f,"include(${{CMAKE_CURRENT_SOURCE_DIR}}/{}/{})", gen_dir_name, inc)?;
+        writeln!(f,"include(${{CMAKE_CURRENT_LIST_DIR}}/{})", inc)?;
     }
     Ok(())
 }
 
-fn write_all(includes: Vec<String>, workspace_dir: &str, to: PathBuf, gen_dir_name: &str) -> Result<()> {
+fn write_all(includes: Vec<String>, workspace_dir: &str, to: PathBuf) -> Result<()> {
     let cmake_file = fs::File::create(&to)?;
     let mut f = BufWriter::new(cmake_file);
     writeln!(f, "set(WORKSPACE_DIR {})", workspace_dir)?;
     writeln!(f, "include_directories({} ${{CMAKE_CURRENT_LIST_DIR}})", workspace_dir)?;
     for inc in includes.into_iter() {
-        writeln!(f,"include(${{CMAKE_CURRENT_SOURCE_DIR}}/{}/{})", gen_dir_name, inc)?;
+        writeln!(f,"include(${{CMAKE_CURRENT_LIST_DIR}}/{})", inc)?;
     }
     Ok(())
 }
@@ -553,7 +572,7 @@ fn main() -> Result<()> {
     let all_deps_gen_file = PathBuf::new()
         .join(&cmake_dir)
         .join("all_deps.cmake");
-    write_deps(deps_gen, all_deps_gen_file, &args.name)?;
+    write_deps(deps_gen, all_deps_gen_file)?;
 
     let targets = query_cc_targets(&args)?;
     let infos = get_cmake_infos(&targets, &args, &bazel_info, false)?;
@@ -561,12 +580,7 @@ fn main() -> Result<()> {
     let all_gen_file = PathBuf::new()
         .join(&cmake_dir)
         .join("all.cmake");
-    write_all(
-        gen,
-        &workspace_dir,
-        all_gen_file,
-        &args.name
-    )?;
+    write_all(gen, &workspace_dir, all_gen_file)?;
 
     Ok(())
 }

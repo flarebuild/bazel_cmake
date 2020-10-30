@@ -24,6 +24,7 @@ _CmakeInfo = provider(
         "gen_srcs",
         "is_executable",
         "include_prefix",
+        "tags",
     ]
 )
 
@@ -102,6 +103,9 @@ def _get_is_executable(target, ctx):
 def _get_include_prefix(target, ctx):
     return getattr(ctx.rule.attr, "include_prefix", None)
 
+def _get_tags(target, ctx):
+    return getattr(ctx.rule.attr, "tags", [])
+
 def get_cmake_info(target, ctx):
     hdrs = _get_hdrs(target, ctx)
     srcs = _get_srcs(target, ctx)
@@ -120,12 +124,20 @@ def get_cmake_info(target, ctx):
         gen_srcs = [s for s in srcs if not s.is_source],
         is_executable = _get_is_executable(target, ctx),
         include_prefix = _get_include_prefix(target, ctx),
+        tags =  _get_tags(target, ctx),
     )
+
+def strip_virt_include(path):
+    if not "_virtual_imports" in path:
+        return path
+    
+    return path [ path.find("/",  path.find("_virtual_imports") + 17) + 1: ]
+
 
 def compose_gen_srcs(ctx, ci, srcs):
     gens = [ s for s in srcs if not s.is_source ]
     if not ci.label.workspace_name:
-        return dict([ (s.short_path, s.path) for s in gens ])
+        return dict([ (strip_virt_include(s.short_path), s.path) for s in gens ])
     
     res = {}
     for s in gens:
@@ -134,7 +146,7 @@ def compose_gen_srcs(ctx, ci, srcs):
         if ci.include_prefix:
             path += "/" + ci.include_prefix
         path += "/" + s.basename
-        res[path] = s.path
+        res[strip_virt_include(path)] = s.path
     return res
 
 def cmake_info_to_json(ci, ctx):
@@ -158,6 +170,7 @@ def cmake_info_to_json(ci, ctx):
         "srcs": [ s.path for s in ci.srcs if s.is_source],
         "gen_srcs": compose_gen_srcs(ctx, ci, ci.gen_srcs),
         "is_executable": ci.is_executable,
+        "tags": ci.tags,
     }
     if ci.include_prefix:
         args["include_prefix"] = ci.include_prefix
