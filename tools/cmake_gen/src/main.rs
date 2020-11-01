@@ -3,7 +3,7 @@ use std::fs;
 use std::fmt;
 use std::result;
 use std::process::{Stdio, Command, Output};
-use std::collections::{HashSet, HashMap, BTreeMap, BTreeSet};
+use std::collections::{HashSet, HashMap, BTreeMap};
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{PathBuf};
@@ -250,7 +250,7 @@ fn is_ignored(info: &CmakeInfo) -> bool {
 }
 
 fn is_inside_package(dep: &str, package: &Option<String>) -> bool {
-    if package.is_none() { return false; }
+    if package.is_none() { return dep.chars().next().unwrap() != '@'; }
     dep.starts_with(package.as_ref().unwrap())
 }
 
@@ -258,7 +258,7 @@ fn get_cmake_infos(
     targets: &HashSet<String>,
     args: &Args,
     bazel_info: &BazelInfo,
-    compile: bool
+    filter_ignored: bool
 ) -> Result<Vec<CmakeInfo>> {
     let mut base_cmd = Command::new("bazel");
     let mut cmd = base_cmd
@@ -273,13 +273,8 @@ fn get_cmake_infos(
 
     cmd = cmd
         .arg("--aspects")
-        .arg(format!("@build_flare_bazel_cmake//rules:cmake_info_aspect.bzl%{}", aspect));
-
-    if compile {
-        cmd = cmd.arg("--output_groups=cmake_info_json,cmake_libs,cmake_gen_hdrs");
-    } else {
-        cmd = cmd.arg("--output_groups=cmake_info_json,cmake_gen_hdrs,cmake_gen_srcs");
-    }
+        .arg(format!("@build_flare_bazel_cmake//rules:cmake_info_aspect.bzl%{}", aspect))
+        .arg("--output_groups=cmake_info_json");
 
     run_cmd(cmd, args)?;
     let (res_wr, errors): (Vec<_>, Vec<_>) = targets
@@ -293,7 +288,7 @@ fn get_cmake_infos(
         .into_iter()
         .map(Result::unwrap)
         .filter(|x| {
-            if compile {
+            if filter_ignored {
                 is_ignored(x) || !is_inside_package(&x.label, &args.package)
             } else {
                 ! is_ignored(x)
@@ -301,6 +296,37 @@ fn get_cmake_infos(
         });
 
     Ok(res.collect())
+}
+
+fn produce_output_group_files(
+    infos: &Vec<CmakeInfo>,
+    args: &Args,
+    compile: bool
+) -> Result<()> {
+    let mut base_cmd = Command::new("bazel");
+    let mut cmd = base_cmd
+        .arg("build")
+        .args(infos.iter().map(|x| &x.label));
+
+    let aspect = if args.link_static {
+        "cmake_info_aspect_static"
+    } else {
+        "cmake_info_aspect_dynamic"
+    };
+
+    cmd = cmd
+        .arg("--aspects")
+        .arg(format!("@build_flare_bazel_cmake//rules:cmake_info_aspect.bzl%{}", aspect));
+
+    if compile {
+        cmd = cmd.arg("--output_groups=cmake_libs,cmake_gen_hdrs");
+    } else {
+        cmd = cmd.arg("--output_groups=cmake_gen_hdrs,cmake_gen_srcs");
+    };
+
+    run_cmd(cmd, args)?;
+
+    Ok(())
 }
 
 fn change_rpath(at: PathBuf, from: &str) -> Result<()> {
@@ -568,6 +594,7 @@ fn main() -> Result<()> {
 
     let targets_deps = query_cc_targets_deps(&args)?;
     let deps_infos =  get_cmake_infos(&targets_deps, &args, &bazel_info, true)?;
+    produce_output_group_files(&deps_infos, &args, true)?;
     let deps_gen = gen_libs(&cmake_dir, deps_infos, &args, &bazel_info, true)?;
     let all_deps_gen_file = PathBuf::new()
         .join(&cmake_dir)
@@ -576,6 +603,7 @@ fn main() -> Result<()> {
 
     let targets = query_cc_targets(&args)?;
     let infos = get_cmake_infos(&targets, &args, &bazel_info, false)?;
+    produce_output_group_files(&infos, &args, false)?;
     let gen =  gen_libs(&cmake_dir, infos,  &args, &bazel_info, false)?;
     let all_gen_file = PathBuf::new()
         .join(&cmake_dir)
