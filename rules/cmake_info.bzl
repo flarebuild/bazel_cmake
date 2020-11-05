@@ -39,10 +39,15 @@ def _get_libs(target, ctx):
     libraries_to_link = target[CcInfo].linking_context.libraries_to_link
     if libraries_to_link:
         for lib in libraries_to_link.to_list():
-            if lib.dynamic_library and lib.dynamic_library.owner == target.label:
+            is_own_lib = (
+                (lib.static_library and lib.static_library.owner == target.label) or
+                (lib.pic_static_library and lib.pic_static_library.owner == target.label) or
+                (lib.dynamic_library and lib.dynamic_library.owner == target.label)
+            )
+            if is_own_lib:
                 result.append(_LibInfo(
                     shared = lib.dynamic_library,
-                    static = lib.static_library if lib.static_library else lib.pic_static_library,
+                    static = lib.pic_static_library if lib.pic_static_library else lib.static_library,
                     link_whole = lib.alwayslink,
                 ))
     return result
@@ -155,8 +160,8 @@ def cmake_info_to_json(ci, ctx):
         "deps": [ str(d) for d in ci.deps ],
         "libs": [
             struct(
-                shared_lib = l.shared.path,
-                static_lib = l.static.path,
+                shared_lib = l.shared.path if l.shared else None,
+                static_lib = l.static.path if l.static else None,
                 link_whole = l.link_whole,
             ) for l in ci.libs
         ],

@@ -141,8 +141,8 @@ struct BazelInfo {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct LibInfo {
-    shared_lib: String,
-    static_lib: String,
+    shared_lib: Option<String>,
+    static_lib: Option<String>,
     link_whole: bool,
 }
 
@@ -440,19 +440,20 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
             }
             if is_interface {
                 for lib in info.libs.iter() {
-                    let lib_name = format!(
-                        "lib{}.{}",
-                        &label.name,
-                        if args.link_static { "a" }
-                        else { "so" }
-                    );
-                    let out_lib = out_dir.join(&lib_name);
-                    println!("Copying lib: {}", if args.link_static {&lib.static_lib} else {&lib.shared_lib});
-                    if args.link_static {
-                        fs::hard_link(&lib.static_lib, &out_lib)?;
+                    let mut lib_name = String::new();
+                    if !args.link_static && lib.shared_lib.is_some() {
+                        lib_name = format!("lib{}.{}", &label.name, "so");
+                        let out_lib = out_dir.join(&lib_name);
+                        println!("Copying lib: {}", lib.shared_lib.as_ref().unwrap());
+                        fs::copy(lib.shared_lib.as_ref().unwrap(), &out_lib)?;
+                        change_rpath(out_lib, lib.shared_lib.as_ref().unwrap())?;
+                    } else if lib.static_lib.is_some() {
+                        lib_name = format!("lib{}.{}", &label.name, "a");
+                        let out_lib = out_dir.join(&lib_name);
+                        println!("Copying lib: {}", lib.static_lib.as_ref().unwrap());
+                        fs::hard_link(lib.static_lib.as_ref().unwrap(), &out_lib)?;
                     } else {
-                        fs::copy(&lib.shared_lib, &out_lib)?;
-                        change_rpath(out_lib, &lib.shared_lib)?;
+                        continue;
                     }
                     writeln!(
                         f,
