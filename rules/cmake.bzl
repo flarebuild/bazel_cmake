@@ -16,6 +16,18 @@ def _cmake_gen_impl(ctx):
     else:
         substitutions.update({"{CONFIG}": "-c " + ctx.attr.config})
 
+    if not ctx.attr.compile_external:
+        substitutions.update({"{COMPILE_EXTERNAL}": ""})
+    else:
+        substitutions.update({"{COMPILE_EXTERNAL}": "-e " + ",".join(ctx.attr.compile_external)})
+
+    if not ctx.attr.repo_path_mapping:
+        substitutions.update({"{REPO_PATH_MAPPING}": ""})
+    else:
+        substitutions.update({"{REPO_PATH_MAPPING}": "-m " + ",".join(
+            [ "%s:%s" % (k,v) for k,v in ctx.attr.repo_path_mapping.items() ]
+        )})
+
     ctx.actions.expand_template(
         template = ctx.file._templ,
         output = run_script,
@@ -38,6 +50,12 @@ _cmake_gen = rule(
         "config": attr.string(
             mandatory = False,
         ),
+        "compile_external": attr.string_list(
+            default = [],
+        ),
+        "repo_path_mapping": attr.string_dict(
+            default = {},
+        ),
         "_templ": attr.label(
             default = Label("//rules:cmake_gen_run.templ"),
             allow_single_file = True,
@@ -53,9 +71,16 @@ _cmake_gen = rule(
     implementation = _cmake_gen_impl,
 )
 
-def cmake_gen(name, config = None):
+def cmake_gen(
+    name, 
+    config = None, 
+    compile_external = [],
+    repo_path_mapping = {},
+):
     _cmake_gen(
         name = name,
         config = config,
+        compile_external = compile_external,
+        repo_path_mapping = repo_path_mapping,
         package = native.package_name(),
     )

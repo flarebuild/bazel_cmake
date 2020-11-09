@@ -258,7 +258,6 @@ fn get_cmake_infos(
     targets: &HashSet<String>,
     args: &Args,
     bazel_info: &BazelInfo,
-    filter_ignored: bool
 ) -> Result<Vec<CmakeInfo>> {
     let mut base_cmd = Command::new("bazel");
     let mut cmd = base_cmd
@@ -283,19 +282,7 @@ fn get_cmake_infos(
         .partition(Result::is_ok);
 
     for err in errors { err?; }
-
-    let res = res_wr
-        .into_iter()
-        .map(Result::unwrap)
-        .filter(|x| {
-            if filter_ignored {
-                is_ignored(x) || !is_inside_package(&x.label, &args.package)
-            } else {
-                ! is_ignored(x)
-            }
-        });
-
-    Ok(res.collect())
+    Ok(res_wr.into_iter().map(Result::unwrap).collect())
 }
 
 fn produce_output_group_files(
@@ -522,11 +509,39 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
             }
 
             if !is_interface {
-                for hdr in info.hdrs.iter() {
-                    writeln!(f, "    ${{WORKSPACE_DIR}}/{}", hdr)?;
-                }
-                for src in info.srcs.iter() {
-                    writeln!(f, "    ${{WORKSPACE_DIR}}/{}", src)?;
+                if label.repo.is_some() {
+                    let repo = label.repo.as_ref().unwrap();
+                    let mapping = args.repo_path_mappings.get(repo);
+                    if mapping.is_some() {
+                        let mapping = mapping.unwrap();
+                        for s in info.hdrs
+                            .iter()
+                            .chain(info.srcs.iter()) {
+
+                            let sub_idx = 9 + repo.len();
+                            let sub = format!("{}/{}", mapping, &s[sub_idx..]);
+
+                            writeln!(f, "    {}", sub)?;
+                        }
+                    } else {
+                        for s in info.hdrs
+                            .iter()
+                            .chain(info.srcs.iter()) {
+
+                            let src = format!("{}/{}", bazel_info.output_base, s);
+                            let dst = format!("{}/{}", cmake_dir, s);
+                            fs::hard_link(&src, &dst)?;
+
+                            writeln!(f, "    ${{WORKSPACE_DIR}}/{}", s)?;
+                        }
+                    }
+                } else {
+                    for hdr in info.hdrs.iter() {
+                        writeln!(f, "    ${{WORKSPACE_DIR}}/{}", hdr)?;
+                    }
+                    for src in info.srcs.iter() {
+                        writeln!(f, "    ${{WORKSPACE_DIR}}/{}", src)?;
+                    }
                 }
                 for src in info.gen_srcs.keys().filter(|x| !info.gen_hdrs.contains_key(*x)) {
                     writeln!(f, "    {}/{}", cmake_dir, src)?;
@@ -565,6 +580,8 @@ struct Args {
     name: String,
     config: Option<String>,
     link_static: bool,
+    compile_external: Vec<String>,
+    repo_path_mappings: HashMap<String, String>,
 }
 
 fn main() -> Result<()> {
@@ -572,11 +589,30 @@ fn main() -> Result<()> {
     env::set_current_dir(&workspace_dir)?;
 
     let mut args = pico_args::Arguments::from_env();
+
+    let compile_external: Option<String> = args.opt_value_from_str("-e")?;
+    let repo_path_mappings: Option<String> =  args.opt_value_from_str("-m")?;
+
     let args = Args {
         package: args.opt_value_from_str("-p")?,
         name: args.value_from_str("-n")?,
         config: args.opt_value_from_str("-c")?,
         link_static: args.value_from_str("-l")?,
+        compile_external: compile_external
+            .map(|x| {
+                x.split(',')
+                    .map(str::to_owned)
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or(Vec::new()),
+        repo_path_mappings: repo_path_mappings
+            .map(|x| {
+                x.split(',')
+                    .map(|x| x.split(':'))
+                    .map(|mut x| ( x.next().unwrap().to_owned(), x.next().unwrap().to_owned() ))
+                    .collect::<HashMap<String, String>>()
+            })
+            .unwrap_or(HashMap::new()),
     };
     let bazel_info = get_bazel_info(&args)?;
 
@@ -594,7 +630,17 @@ fn main() -> Result<()> {
     fs::create_dir(&cmake_dir)?;
 
     let targets_deps = query_cc_targets_deps(&args)?;
-    let deps_infos =  get_cmake_infos(&targets_deps, &args, &bazel_info, true)?;
+    let (deps_infos, compile_external): (Vec<_>, Vec<_>) =  get_cmake_infos(&targets_deps, &args, &bazel_info)?
+        .into_iter()
+        .filter(|x| is_ignored(x) || !is_inside_package(&x.label, &args.package))
+        .partition(|x| {
+            for e in &args.compile_external {
+                if x.label.starts_with(e) {
+                    return false;
+                }
+            }
+            true
+        });
     produce_output_group_files(&deps_infos, &args, true)?;
     let deps_gen = gen_libs(&cmake_dir, deps_infos, &args, &bazel_info, true)?;
     let all_deps_gen_file = PathBuf::new()
@@ -603,7 +649,13 @@ fn main() -> Result<()> {
     write_deps(deps_gen, all_deps_gen_file)?;
 
     let targets = query_cc_targets(&args)?;
-    let infos = get_cmake_infos(&targets, &args, &bazel_info, false)?;
+    let mut infos = get_cmake_infos(&targets, &args, &bazel_info)?
+        .into_iter()
+        .filter(|x| !is_ignored(x))
+        .collect::<Vec<_>>();
+
+    infos.extend(compile_external.into_iter());
+
     produce_output_group_files(&infos, &args, false)?;
     let gen =  gen_libs(&cmake_dir, infos,  &args, &bazel_info, false)?;
     let all_gen_file = PathBuf::new()
