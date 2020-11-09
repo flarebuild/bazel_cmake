@@ -23,6 +23,7 @@ _CmakeInfo = provider(
         "srcs",
         "gen_srcs",
         "is_executable",
+        "strip_include_prefix",
         "include_prefix",
         "tags",
     ]
@@ -108,6 +109,9 @@ def _get_is_executable(target, ctx):
 def _get_include_prefix(target, ctx):
     return getattr(ctx.rule.attr, "include_prefix", None)
 
+def _get_strip_include_prefix(target, ctx):
+    return getattr(ctx.rule.attr, "strip_include_prefix", None)
+
 def _get_tags(target, ctx):
     return getattr(ctx.rule.attr, "tags", [])
 
@@ -128,6 +132,7 @@ def get_cmake_info(target, ctx):
         srcs = [s for s in srcs if s.is_source],
         gen_srcs = [s for s in srcs if not s.is_source],
         is_executable = _get_is_executable(target, ctx),
+        strip_include_prefix = _get_strip_include_prefix(target, ctx),
         include_prefix = _get_include_prefix(target, ctx),
         tags =  _get_tags(target, ctx),
     )
@@ -179,5 +184,8 @@ def cmake_info_to_json(ci, ctx):
     }
     if ci.include_prefix:
         args["include_prefix"] = ci.include_prefix
+
+    if ci.strip_include_prefix:
+        args["strip_include_prefix"] = ci.strip_include_prefix
 
     return struct(**args).to_json()

@@ -162,6 +162,7 @@ struct CmakeInfo {
     gen_srcs: BTreeMap<String, String>,
     is_executable: bool,
     include_prefix: Option<String>,
+    strip_include_prefix: Option<String>,
     tags: HashSet<String>,
 }
 
@@ -218,13 +219,12 @@ impl Label {
         res
     }
 
-    fn to_path(&self, postf: &str) -> PathBuf {
+    fn to_path(&self) -> PathBuf {
         let mut path = PathBuf::new();
         if self.repo.is_some() {
             path = path.join("external").join(self.repo.as_ref().unwrap());
         }
         path = path.join(&self.package);
-        path = path.join(format!("{}{}", &self.name, postf));
         path
     }
 }
@@ -233,7 +233,7 @@ fn read_cmake_info(target: &str, bazel_info: &BazelInfo) -> Result<CmakeInfo> {
     let label = Label::new(target)?;
     let path =  PathBuf::new()
         .join(&bazel_info.bazel_bin)
-        .join(label.to_path("_info.json"));
+        .join(label.to_path().join(format!("{}_info.json", label.name)));
     if !path.exists() {
         return Err(Box::new(ExitCodeError(127, path.to_string_lossy().to_string())));
     }
@@ -371,12 +371,7 @@ fn unwrap_include_path(label: &Label, inpath: &str, bazel_info: &BazelInfo) -> R
             .join("external")
             .join(label.repo.as_ref().unwrap().to_owned())
     }
-    path = if inpath == "." {
-        path.join(&label.package)
-    } else {
-        path.join(inpath)
-    };
-
+    path = path.join(inpath);
     Ok(path.canonicalize()?)
 }
 
@@ -390,7 +385,7 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
 
         let label = Label::new(&info.label)?;
         let cmake_name = label.to_cmake_target_name();
-        let out_dir_rel = label.to_path("");
+        let out_dir_rel = label.to_path();
         let out_dir = PathBuf::new().join(cmake_dir).join(out_dir_rel.clone());
         fs::create_dir_all(out_dir.as_path())?;
         let cmake_path_rel = out_dir_rel.join(format!("{}.cmake", &label.name));
@@ -427,28 +422,33 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
             }
             if is_interface {
                 for lib in info.libs.iter() {
-                    let mut lib_name = String::new();
+                    let mut write_lib = |lib_name: &str| -> Result<()> {
+                        writeln!(
+                            f,
+                            "    {}${{CMAKE_CURRENT_LIST_DIR}}/{}",
+                            if lib.link_whole { "-Wl,-force_load," }
+                            else { " "},
+                            lib_name
+                        )?;
+                        Ok(())
+                    };
+
                     if !args.link_static && lib.shared_lib.is_some() {
-                        lib_name = format!("lib{}.{}", &label.name, "so");
+                        let lib_name = format!("lib{}.{}", &label.name, "so");
                         let out_lib = out_dir.join(&lib_name);
                         println!("Copying lib: {}", lib.shared_lib.as_ref().unwrap());
                         fs::copy(lib.shared_lib.as_ref().unwrap(), &out_lib)?;
                         change_rpath(out_lib, lib.shared_lib.as_ref().unwrap())?;
+                        write_lib(&lib_name)?;
                     } else if lib.static_lib.is_some() {
-                        lib_name = format!("lib{}.{}", &label.name, "a");
+                        let lib_name = format!("lib{}.{}", &label.name, "a");
                         let out_lib = out_dir.join(&lib_name);
                         println!("Copying lib: {}", lib.static_lib.as_ref().unwrap());
                         fs::hard_link(lib.static_lib.as_ref().unwrap(), &out_lib)?;
+                        write_lib(&lib_name)?;
                     } else {
                         continue;
                     }
-                    writeln!(
-                        f,
-                        "    {}${{CMAKE_CURRENT_LIST_DIR}}/{}",
-                        if lib.link_whole { "-Wl,-force_load," }
-                        else { " "},
-                        &lib_name
-                    )?;
                 }
             }
             writeln!(f, ")\n")?;
@@ -476,15 +476,54 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
         }
 
         if !info.include_dirs.is_empty() || !info.gen_hdrs.is_empty() {
-            let dirs: Vec<String> = info.include_dirs.clone()
-                .into_iter()
-                .map(|x|  unwrap_include_path(&label, &x, bazel_info))
+            let mut dirs: Vec<String> = info.include_dirs
+                .iter()
+                .filter(|x| x.as_str() != ".")
+                .map(|x|  unwrap_include_path(&label, x, bazel_info))
                 .filter(result::Result::is_ok)
                 .map(result::Result::unwrap)
                 .map(|x| x.to_str().map(str::to_owned))
                 .filter(Option::is_some)
                 .map(Option::unwrap)
                 .collect();
+
+            let package = label.package.to_str().unwrap();
+            if info.include_dirs
+                .iter()
+                .filter(|x| x.as_str() == ".")
+                .next()
+                .is_some() {
+
+
+                unwrap_include_path(&label, package, bazel_info)
+                    .map(|x| {
+                        dirs.push(x.to_str().unwrap().to_owned());
+                    })?;
+            }
+
+            if info.strip_include_prefix.is_some() {
+                let strip_include_prefix = info.strip_include_prefix.as_ref().unwrap();
+                unwrap_include_path(&label, package, bazel_info)
+                    .map(|x| x.join(strip_include_prefix))
+                    .map(|x| {
+                        dirs.push(x.to_str().unwrap().to_owned());
+                    })?;
+            }
+
+            if !info.gen_hdrs.is_empty() {
+                let mut gen_inc = PathBuf::new()
+                    .join(cmake_dir)
+                    .join(label.to_path());
+
+
+                dirs.push(gen_inc.to_str().unwrap().to_owned());
+
+                if info.strip_include_prefix.is_some() {
+                    gen_inc = gen_inc.join(info.strip_include_prefix.as_ref().unwrap());
+                    dirs.push(gen_inc.to_str().unwrap().to_owned());
+                }
+            }
+
 
             if !dirs.is_empty() {
                 writeln!(f, "target_include_directories({} {}", &cmake_name, if is_interface { "INTERFACE" } else { "PUBLIC" })?;
