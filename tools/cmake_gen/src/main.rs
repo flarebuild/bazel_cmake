@@ -375,6 +375,17 @@ fn unwrap_include_path(label: &Label, inpath: &str, bazel_info: &BazelInfo) -> R
     Ok(path.canonicalize()?)
 }
 
+#[cfg(target_os = "macos")]
+fn link_whole_str(args: &Args) -> &str {
+    "-Wl,-force_load,"
+}
+
+#[cfg(target_os = "linux")]
+fn link_whole_str(args: &Args) -> &str {
+    if args.link_static { "-Wl,--whole-archive," }
+    else { "-Wl,-force_load,"  }
+}
+
 fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &BazelInfo, is_external: bool) -> Result<Vec<String>> {
     let mut res = Vec::new();
     for info in infos.into_iter() {
@@ -426,7 +437,7 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
                         writeln!(
                             f,
                             "    {}${{CMAKE_CURRENT_LIST_DIR}}/{}",
-                            if lib.link_whole { "-Wl,-force_load," }
+                            if lib.link_whole { link_whole_str(args) }
                             else { " "},
                             lib_name
                         )?;
