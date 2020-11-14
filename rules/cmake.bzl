@@ -21,6 +21,11 @@ def _cmake_gen_impl(ctx):
     else:
         substitutions.update({"{COMPILE_EXTERNAL}": "-e " + ",".join(ctx.attr.compile_external)})
 
+    if not ctx.attr.additional_allwayslinks:
+        substitutions.update({"{ADDITIONAL_ALLWAYS_LINKS}": ""})
+    else:
+        substitutions.update({"{ADDITIONAL_ALLWAYS_LINKS}": "-a " + ",".join(ctx.attr.additional_allwayslinks)})
+
     if not ctx.attr.repo_path_mapping:
         substitutions.update({"{REPO_PATH_MAPPING}": ""})
     else:
@@ -53,6 +58,9 @@ _cmake_gen = rule(
         "compile_external": attr.string_list(
             default = [],
         ),
+        "additional_allwayslinks": attr.string_list(
+            default = [],
+        ),
         "repo_path_mapping": attr.string_dict(
             default = {},
         ),
@@ -76,11 +84,13 @@ def cmake_gen(
     config = None, 
     compile_external = [],
     repo_path_mapping = {},
+    additional_allwayslinks = [],
 ):
     _cmake_gen(
         name = name,
         config = config,
         compile_external = compile_external,
         repo_path_mapping = repo_path_mapping,
+        additional_allwayslinks = additional_allwayslinks,
         package = native.package_name(),
     )

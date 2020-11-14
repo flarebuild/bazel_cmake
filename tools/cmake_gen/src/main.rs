@@ -380,11 +380,17 @@ fn link_whole_str(args: &Args) -> &str {
     "-Wl,-force_load,"
 }
 
+#[cfg(target_os = "macos")]
+static is_linux: bool = false;
+
 #[cfg(target_os = "linux")]
 fn link_whole_str(args: &Args) -> &str {
     if args.link_static { "-Wl,--whole-archive," }
     else { "-Wl,-force_load,"  }
 }
+
+#[cfg(target_os = "linux")]
+static is_linux: bool = true;
 
 fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &BazelInfo, is_external: bool) -> Result<Vec<String>> {
     let mut res = Vec::new();
@@ -425,6 +431,10 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
 
         if !info.deps.is_empty() || !info.link_flags.is_empty() || (is_interface && !info.libs.is_empty()) {
             writeln!(f, "target_link_libraries({} {}", &cmake_name, if is_interface { "INTERFACE" } else { "PUBLIC" })?;
+            if is_linux {
+                writeln!(f, "    -Wl,--start-group")?;
+            }
+
             for link_opt in info.link_flags.iter() {
                 writeln!(f, "    {}", link_opt)?;
             }
@@ -437,7 +447,9 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
                         writeln!(
                             f,
                             "    {}${{CMAKE_CURRENT_LIST_DIR}}/{}",
-                            if lib.link_whole { link_whole_str(args) }
+                            if lib.link_whole
+                                || args.additional_allwayslinks.contains(&info.label)
+                                { link_whole_str(args) }
                             else { " "},
                             lib_name
                         )?;
@@ -461,6 +473,9 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
                         continue;
                     }
                 }
+            }
+            if info.is_executable {
+                writeln!(f, "    ${{cmake_gen_exe_additional_libs}}")?;
             }
             writeln!(f, ")\n")?;
         }
@@ -631,6 +646,7 @@ struct Args {
     config: Option<String>,
     link_static: bool,
     compile_external: Vec<String>,
+    additional_allwayslinks: HashSet<String>,
     repo_path_mappings: HashMap<String, String>,
 }
 
@@ -641,6 +657,7 @@ fn main() -> Result<()> {
     let mut args = pico_args::Arguments::from_env();
 
     let compile_external: Option<String> = args.opt_value_from_str("-e")?;
+    let additional_allwayslinks: Option<String> = args.opt_value_from_str("-a")?;
     let repo_path_mappings: Option<String> =  args.opt_value_from_str("-m")?;
 
     let args = Args {
@@ -655,6 +672,13 @@ fn main() -> Result<()> {
                     .collect::<Vec<String>>()
             })
             .unwrap_or(Vec::new()),
+        additional_allwayslinks: additional_allwayslinks
+            .map(|x| {
+                x.split(',')
+                    .map(str::to_owned)
+                    .collect::<HashSet<String>>()
+            })
+            .unwrap_or(HashSet::new()),
         repo_path_mappings: repo_path_mappings
             .map(|x| {
                 x.split(',')
