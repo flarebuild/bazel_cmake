@@ -116,9 +116,11 @@ fn unwrap_package(pkg: &Option<String>) -> String {
 fn query_cc_targets(args: &Args) -> Result<HashSet<String>> {
     let lookup_libraries = format!("kind(cc_library, {}...)", unwrap_package(&args.package));
     let lookup_binaries = format!("kind(cc_binary, {}...)", unwrap_package(&args.package));
+    let lookup_tests = format!("kind(cc_test, {}...)", unwrap_package(&args.package));
     let res: HashSet<String> = [
         do_query_list(&lookup_libraries, args)?,
-        do_query_list(&lookup_binaries, args)?
+        do_query_list(&lookup_binaries, args)?,
+        do_query_list(&lookup_tests, args)?,
     ].concat()
         .into_iter()
         .collect();
