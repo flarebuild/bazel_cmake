@@ -377,13 +377,25 @@ fn unwrap_include_path(label: &Label, inpath: &str, bazel_info: &BazelInfo) -> R
     Ok(path.canonicalize()?)
 }
 
+fn unwrap_include_path_gen_dir(label: &Label, inpath: &str, cmake_gen_dir: &str) -> Result<PathBuf> {
+    let mut path = PathBuf::new()
+        .join(cmake_gen_dir);
+    if label.repo.is_some() {
+        path = path
+            .join("external")
+            .join(label.repo.as_ref().unwrap().to_owned())
+    }
+    path = path.join(inpath);
+    Ok(path.canonicalize()?)
+}
+
 #[cfg(target_os = "macos")]
-fn link_whole_str(args: &Args) -> &str {
+fn link_whole_str(_args: &Args) -> &str {
     "-Wl,-force_load,"
 }
 
 #[cfg(target_os = "macos")]
-static is_linux: bool = false;
+static IS_LINUX: bool = false;
 
 #[cfg(target_os = "linux")]
 fn link_whole_str(args: &Args) -> &str {
@@ -392,7 +404,7 @@ fn link_whole_str(args: &Args) -> &str {
 }
 
 #[cfg(target_os = "linux")]
-static is_linux: bool = true;
+static IS_LINUX: bool = true;
 
 fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &BazelInfo, is_external: bool) -> Result<Vec<String>> {
     let mut res = Vec::new();
@@ -433,7 +445,7 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
 
         if !info.deps.is_empty() || !info.link_flags.is_empty() || (is_interface && !info.libs.is_empty()) {
             writeln!(f, "target_link_libraries({} {}", &cmake_name, if is_interface { "INTERFACE" } else { "PUBLIC" })?;
-            if is_linux {
+            if IS_LINUX {
                 writeln!(f, "    -Wl,--start-group")?;
             }
 
@@ -503,7 +515,7 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
             writeln!(f, ")\n")?;
         }
 
-        if !info.include_dirs.is_empty() || !info.gen_hdrs.is_empty() {
+        if !info.include_dirs.is_empty() || !info.gen_hdrs.is_empty() || info.strip_include_prefix.is_some() {
             let mut dirs: Vec<String> = info.include_dirs
                 .iter()
                 .filter(|x| x.as_str() != ".")
@@ -522,11 +534,10 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
                 .next()
                 .is_some() {
 
-
                 unwrap_include_path(&label, package, bazel_info)
-                    .map(|x| {
-                        dirs.push(x.to_str().unwrap().to_owned());
-                    })?;
+                    .map(|x| {  dirs.push(x.to_str().unwrap().to_owned()); })?;
+                unwrap_include_path_gen_dir(&label, package, cmake_dir)
+                    .map(|x| {  dirs.push(x.to_str().unwrap().to_owned()); })?;
             }
 
             if info.strip_include_prefix.is_some() {

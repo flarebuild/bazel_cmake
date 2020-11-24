@@ -186,6 +186,12 @@ def cmake_info_to_json(ci, ctx):
         args["include_prefix"] = ci.include_prefix
 
     if ci.strip_include_prefix:
-        args["strip_include_prefix"] = ci.strip_include_prefix
+        strip_include_prefix = ci.strip_include_prefix
+        for i in range(0, len(strip_include_prefix)):
+            if strip_include_prefix[i] == '/':
+                strip_include_prefix = strip_include_prefix[1:]
+            else:
+                break
+        args["strip_include_prefix"] = strip_include_prefix
 
     return struct(**args).to_json()
