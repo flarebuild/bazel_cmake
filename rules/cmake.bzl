@@ -16,6 +16,11 @@ def _cmake_gen_impl(ctx):
     else:
         substitutions.update({"{CONFIG}": "-c " + ctx.attr.config})
 
+    if not ctx.attr.additional_build_args:
+        substitutions.update({"{ADDITIONAL_BUILD_ARGS}": ""})
+    else:
+        substitutions.update({"{ADDITIONAL_BUILD_ARGS}": "-b " + ",".join(ctx.attr.additional_build_args)})
+
     if not ctx.attr.compile_external:
         substitutions.update({"{COMPILE_EXTERNAL}": ""})
     else:
@@ -55,6 +60,9 @@ _cmake_gen = rule(
         "config": attr.string(
             mandatory = False,
         ),
+        "additional_build_args": attr.string_list(
+            default = [],
+        ),
         "compile_external": attr.string_list(
             default = [],
         ),
@@ -81,7 +89,8 @@ _cmake_gen = rule(
 
 def cmake_gen(
     name, 
-    config = None, 
+    config = None,
+    additional_build_args = [],
     compile_external = [],
     repo_path_mapping = {},
     additional_allwayslinks = [],
@@ -89,6 +98,7 @@ def cmake_gen(
     _cmake_gen(
         name = name,
         config = config,
+        additional_build_args = additional_build_args,
         compile_external = compile_external,
         repo_path_mapping = repo_path_mapping,
         additional_allwayslinks = additional_allwayslinks,

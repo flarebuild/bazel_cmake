@@ -34,13 +34,8 @@ fn check_exit_code(out: &Output, print_stderr: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_cmd(cmd: &mut Command, args: &Args) -> Result<Output> {
+fn run_cmd_common(cmd: &mut Command, args: &Args) -> Result<Output> {
     let mut cmd = cmd;
-    if args.config.is_some() {
-        cmd = cmd
-            .arg("--config")
-            .arg(args.config.as_ref().unwrap());
-    }
     cmd.stdin(Stdio::inherit());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::inherit());
@@ -49,6 +44,30 @@ fn run_cmd(cmd: &mut Command, args: &Args) -> Result<Output> {
     let res = cmd.output()?;
     check_exit_code(&res, false)?;
     Ok(res)
+}
+
+fn run_cmd(cmd: &mut Command, args: &Args) -> Result<Output> {
+    let mut cmd = cmd;
+    if args.config.is_some() {
+        cmd = cmd
+            .arg("--config")
+            .arg(args.config.as_ref().unwrap());
+    }
+    run_cmd_common(cmd, args)
+}
+
+fn run_build(cmd: &mut Command, args: &Args) -> Result<Output> {
+    let mut cmd = cmd;
+    if args.config.is_some() {
+        cmd = cmd
+            .arg("--config")
+            .arg(args.config.as_ref().unwrap());
+    }
+    for arg in &args.additional_build_args {
+        cmd = cmd
+            .arg(arg)
+    }
+    run_cmd_common(cmd, args)
 }
 
 fn get_bazel_info(args: &Args) -> Result<BazelInfo> {
@@ -277,7 +296,7 @@ fn get_cmake_infos(
         .arg(format!("@build_flare_bazel_cmake//rules:cmake_info_aspect.bzl%{}", aspect))
         .arg("--output_groups=cmake_info_json");
 
-    run_cmd(cmd, args)?;
+    run_build(cmd, args)?;
     let (res_wr, errors): (Vec<_>, Vec<_>) = targets
         .iter()
         .map(|x| read_cmake_info(&x, bazel_info))
@@ -313,7 +332,7 @@ fn produce_output_group_files(
         cmd = cmd.arg("--output_groups=cmake_gen_hdrs,cmake_gen_srcs");
     };
 
-    run_cmd(cmd, args)?;
+    run_build(cmd, args)?;
 
     Ok(())
 }
@@ -657,6 +676,7 @@ struct Args {
     package: Option<String>,
     name: String,
     config: Option<String>,
+    additional_build_args: Vec<String>,
     link_static: bool,
     compile_external: Vec<String>,
     additional_allwayslinks: HashSet<String>,
@@ -669,6 +689,7 @@ fn main() -> Result<()> {
 
     let mut args = pico_args::Arguments::from_env();
 
+    let additional_build_args: Option<String> = args.opt_value_from_str("-b")?;
     let compile_external: Option<String> = args.opt_value_from_str("-e")?;
     let additional_allwayslinks: Option<String> = args.opt_value_from_str("-a")?;
     let repo_path_mappings: Option<String> =  args.opt_value_from_str("-m")?;
@@ -677,6 +698,13 @@ fn main() -> Result<()> {
         package: args.opt_value_from_str("-p")?,
         name: args.value_from_str("-n")?,
         config: args.opt_value_from_str("-c")?,
+        additional_build_args: additional_build_args
+            .map(|x| {
+                x.split(',')
+                    .map(str::to_owned)
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or(Vec::new()),
         link_static: args.value_from_str("-l")?,
         compile_external: compile_external
             .map(|x| {
