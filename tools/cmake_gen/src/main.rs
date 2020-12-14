@@ -464,9 +464,9 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
 
         if !info.deps.is_empty() || !info.link_flags.is_empty() || (is_interface && !info.libs.is_empty()) {
             writeln!(f, "target_link_libraries({} {}", &cmake_name, if is_interface { "INTERFACE" } else { "PUBLIC" })?;
-            if IS_LINUX {
-                writeln!(f, "    -Wl,--start-group")?;
-            }
+//            if IS_LINUX {
+//                writeln!(f, "    -Wl,--start-group")?;
+//            }
 
             for link_opt in info.link_flags.iter() {
                 writeln!(f, "    {}", link_opt)?;
