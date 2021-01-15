@@ -5,4 +5,4 @@ blackjack:
 build_flare_bazel_deps:
   maybe_path: "../../bazel_deps"
   remote: "https://github.com/flarebuild/bazel_deps"
-  commit: 560e0899dbd5185ff2d2f69e4aa8e78a5c72d3dc
+  commit: e544e96e1f976e4a2ed2ec3161e63576280f1279

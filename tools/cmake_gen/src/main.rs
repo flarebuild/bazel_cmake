@@ -6,7 +6,7 @@ use std::process::{Stdio, Command, Output};
 use std::collections::{HashSet, HashMap, BTreeMap};
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, BufWriter, Write};
-use std::path::{PathBuf};
+use std::path::{PathBuf, Path};
 
 type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -360,6 +360,23 @@ fn change_rpath(at: PathBuf, from: &str) -> Result<()> {
     Ok(())
 }
 
+fn copy_gen_course(gen_src: impl AsRef<Path>, out_path: impl AsRef<Path>) -> Result<()> {
+    let md = fs::metadata(&gen_src)?;
+    if md.is_file() {
+        fs::hard_link(gen_src, out_path)?;
+    } else {
+        fs::create_dir_all(&out_path)?;
+        for entry in fs::read_dir(gen_src)? {
+            let entry = entry?;
+            copy_gen_course(
+                entry.path(),
+                out_path.as_ref().join(entry.file_name())
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_gens(cmake_dir: &str, info: &CmakeInfo, is_interface: bool) -> Result<()> {
     let cmake_dir = PathBuf::new().join(cmake_dir);
     let gens = if is_interface {
@@ -379,7 +396,7 @@ fn copy_gens(cmake_dir: &str, info: &CmakeInfo, is_interface: bool) -> Result<()
             fs::create_dir_all(out_path.parent().unwrap())?;
         }
         println!("Copying gen source: {} to {:?}", gen_src, &out_path);
-        fs::hard_link(gen_src, out_path)?
+        copy_gen_course(PathBuf::new().join(gen_src), out_path)?;
     }
     Ok(())
 }

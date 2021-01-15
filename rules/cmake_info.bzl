@@ -37,20 +37,21 @@ def _get_deps(target, ctx):
 
 def _get_libs(target, ctx):
     result = []
-    libraries_to_link = target[CcInfo].linking_context.libraries_to_link
-    if libraries_to_link:
-        for lib in libraries_to_link.to_list():
-            is_own_lib = (
-                (lib.static_library and lib.static_library.owner == target.label) or
-                (lib.pic_static_library and lib.pic_static_library.owner == target.label) or
-                (lib.dynamic_library and lib.dynamic_library.owner == target.label)
-            )
-            if is_own_lib:
-                result.append(_LibInfo(
-                    shared = lib.dynamic_library,
-                    static = lib.pic_static_library if lib.pic_static_library else lib.static_library,
-                    link_whole = lib.alwayslink,
-                ))
+    if CcInfo in target:
+        libraries_to_link = target[CcInfo].linking_context.libraries_to_link
+        if libraries_to_link:
+            for lib in libraries_to_link.to_list():
+                is_own_lib = (
+                    (lib.static_library and lib.static_library.owner == target.label) or
+                    (lib.pic_static_library and lib.pic_static_library.owner == target.label) or
+                    (lib.dynamic_library and lib.dynamic_library.owner == target.label)
+                )
+                if is_own_lib:
+                    result.append(_LibInfo(
+                        shared = lib.dynamic_library,
+                        static = lib.pic_static_library if lib.pic_static_library else lib.static_library,
+                        link_whole = lib.alwayslink,
+                    ))
     return result
 
 def _get_link_flags(target, ctx):
