@@ -1,77 +1,45 @@
+_CmakeGenRunArgs = provider(
+    fields = [
+        "target_dir",
+        "query_packages",
+        "config",
+        "additional_build_args",
+        "link_static",
+        "compile_external",
+        "additional_always_links",
+        "repo_path_mapping",
+    ]
+)
+
 def _cmake_gen_impl(ctx):
     run_script = ctx.actions.declare_file(ctx.attr.name + ".sh")
-    substitutions = {
-        "{TOOL}": ctx.executable._tool.short_path,
-        "{NAME}": ctx.attr.name,
-        "{LINKSTATIC}": "true" if ctx.attr.linkstatic else "false",
-    }
+    args_json_file = ctx.actions.declare_file(ctx.attr.name + ".args.json")
 
-    if not len(ctx.attr.package):
-        substitutions.update({"{PACKAGE}": ""})
-    else:
-        substitutions.update({"{PACKAGE}": "-p //" + ctx.attr.package})
-
-    if not ctx.attr.config:
-        substitutions.update({"{CONFIG}": ""})
-    else:
-        substitutions.update({"{CONFIG}": "-c " + ctx.attr.config})
-
-    if not ctx.attr.additional_build_args:
-        substitutions.update({"{ADDITIONAL_BUILD_ARGS}": ""})
-    else:
-        substitutions.update({"{ADDITIONAL_BUILD_ARGS}": "-b " + ",".join(ctx.attr.additional_build_args)})
-
-    if not ctx.attr.compile_external:
-        substitutions.update({"{COMPILE_EXTERNAL}": ""})
-    else:
-        substitutions.update({"{COMPILE_EXTERNAL}": "-e " + ",".join(ctx.attr.compile_external)})
-
-    if not ctx.attr.additional_allwayslinks:
-        substitutions.update({"{ADDITIONAL_ALLWAYS_LINKS}": ""})
-    else:
-        substitutions.update({"{ADDITIONAL_ALLWAYS_LINKS}": "-a " + ",".join(ctx.attr.additional_allwayslinks)})
-
-    if not ctx.attr.repo_path_mapping:
-        substitutions.update({"{REPO_PATH_MAPPING}": ""})
-    else:
-        substitutions.update({"{REPO_PATH_MAPPING}": "-m " + ",".join(
-            [ "%s:%s" % (k,v) for k,v in ctx.attr.repo_path_mapping.items() ]
-        )})
+    ctx.actions.write(
+        output = args_json_file,
+        content = ctx.attr.input_args_json,
+    )
 
     ctx.actions.expand_template(
         template = ctx.file._templ,
         output = run_script,
-        substitutions = substitutions,
+        substitutions = {
+            "{TOOL}": ctx.executable._tool.short_path,
+            "{ARGS_JSON}": args_json_file.path,
+        },
         is_executable = True,
     )
     return DefaultInfo(
         executable = run_script, 
-        runfiles = ctx.runfiles(files=[ctx.executable._tool])
+        runfiles = ctx.runfiles(files=[
+            ctx.executable._tool,
+            args_json_file,
+        ])
     )
 
 _cmake_gen = rule(
     attrs = {
-        "package": attr.string(
-            mandatory = True,
-        ),
-        "linkstatic": attr.bool(
-            default = True,
-        ),
-        "config": attr.string(
-            mandatory = False,
-        ),
-        "additional_build_args": attr.string_list(
-            default = [],
-        ),
-        "compile_external": attr.string_list(
-            default = [],
-        ),
-        "additional_allwayslinks": attr.string_list(
-            default = [],
-        ),
-        "repo_path_mapping": attr.string_dict(
-            default = {},
-        ),
+        "input_args_json": attr.string(),
         "_templ": attr.label(
             default = Label("//rules:cmake_gen_run.templ"),
             allow_single_file = True,
@@ -88,19 +56,34 @@ _cmake_gen = rule(
 )
 
 def cmake_gen(
-    name, 
+    name,
+    query_packages = [ "" ],
     config = None,
     additional_build_args = [],
+    link_static = True,
     compile_external = [],
     repo_path_mapping = {},
-    additional_allwayslinks = [],
+    additional_always_links = [],
 ):
+    package_name = native.package_name()
+    if package_name:
+        target_dir = "%s/%s" % (
+            native.package_name(),
+            name,
+        )
+    else:
+        target_dir = name
+
     _cmake_gen(
         name = name,
-        config = config,
-        additional_build_args = additional_build_args,
-        compile_external = compile_external,
-        repo_path_mapping = repo_path_mapping,
-        additional_allwayslinks = additional_allwayslinks,
-        package = native.package_name(),
+        input_args_json = _CmakeGenRunArgs(
+            target_dir = target_dir,
+            query_packages = query_packages,
+            config = config,
+            additional_build_args = additional_build_args,
+            link_static = link_static,
+            compile_external = compile_external,
+            repo_path_mapping = repo_path_mapping,
+            additional_always_links = additional_always_links,
+        ).to_json(),        
     )

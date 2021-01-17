@@ -34,8 +34,7 @@ fn check_exit_code(out: &Output, print_stderr: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_cmd_common(cmd: &mut Command, args: &Args) -> Result<Output> {
-    let mut cmd = cmd;
+fn run_cmd_common(cmd: &mut Command) -> Result<Output> {
     cmd.stdin(Stdio::inherit());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::inherit());
@@ -53,7 +52,7 @@ fn run_cmd(cmd: &mut Command, args: &Args) -> Result<Output> {
             .arg("--config")
             .arg(args.config.as_ref().unwrap());
     }
-    run_cmd_common(cmd, args)
+    run_cmd_common(cmd)
 }
 
 fn run_build(cmd: &mut Command, args: &Args) -> Result<Output> {
@@ -67,7 +66,7 @@ fn run_build(cmd: &mut Command, args: &Args) -> Result<Output> {
         cmd = cmd
             .arg(arg)
     }
-    run_cmd_common(cmd, args)
+    run_cmd_common(cmd)
 }
 
 fn get_bazel_info(args: &Args) -> Result<BazelInfo> {
@@ -96,7 +95,7 @@ fn get_bazel_info(args: &Args) -> Result<BazelInfo> {
 }
 
 fn do_query(
-    lookup: &str,
+    lookup: String,
     output: &str,
     args: &Args
 ) -> Result<Output> {
@@ -110,11 +109,11 @@ fn do_query(
 }
 
 fn do_query_list(
-    lookup: &str,
+    lookup: String,
     args: &Args
-) -> Result<Vec<String>> {
+) -> Result<HashSet<String>> {
     let out = do_query(lookup, "label", args)?;
-    let res: Vec<String> = String::from_utf8_lossy(&out.stdout)
+    let res: HashSet<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(str::split_ascii_whitespace)
         .map(|mut x| x.next())
@@ -124,35 +123,40 @@ fn do_query_list(
     Ok(res)
 }
 
-fn unwrap_package(pkg: &Option<String>) -> String {
-    if pkg.is_none() {
+fn unwrap_package(pkg: &str) -> String {
+    if pkg.is_empty() {
         "//".to_owned()
+    } else if !pkg.starts_with("//") {
+        let formatted = format!("//{}", pkg);
+        unwrap_package(&formatted)
     } else {
-        format!("{}/", pkg.as_ref().unwrap())
+        pkg.to_owned()
     }
 }
 
 fn query_cc_targets(args: &Args) -> Result<HashSet<String>> {
-    let lookup_libraries = format!("kind(cc_library, {}...)", unwrap_package(&args.package));
-    let lookup_binaries = format!("kind(cc_binary, {}...)", unwrap_package(&args.package));
-    let lookup_tests = format!("kind(cc_test, {}...)", unwrap_package(&args.package));
-    let res: HashSet<String> = [
-        do_query_list(&lookup_libraries, args)?,
-        do_query_list(&lookup_binaries, args)?,
-        do_query_list(&lookup_tests, args)?,
-    ].concat()
-        .into_iter()
-        .collect();
-    Ok(res)
+    let lookup = args.query_packages
+        .iter()
+        .map(|package| ["cc_library", "cc_binary", "cc_test"]
+            .iter()
+            .map(|x| format!("kind({}, {}/...)", x, package))
+            .collect::<Vec<String>>()
+            .join("+")
+        )
+        .collect::<Vec<String>>()
+        .join(" + ");
+
+    do_query_list(lookup, args)
 }
 
 fn query_cc_targets_deps(args: &Args) -> Result<HashSet<String>> {
-    let pkg = unwrap_package(&args.package);
-    let lookup = format!("kind(cc_library, deps({}...))", &pkg);
-    let res: HashSet<String> = do_query_list(&lookup, args)?
-        .into_iter()
-        .collect();
-    Ok(res)
+    let lookup = args.query_packages
+        .iter()
+        .map(|package| format!("kind(cc_library, deps({}/...))", package))
+        .collect::<Vec<String>>()
+        .join(" + ");
+
+    do_query_list(lookup, args)
 }
 
 struct BazelInfo {
@@ -270,9 +274,15 @@ fn is_ignored(info: &CmakeInfo) -> bool {
     info.tags.contains("cmake_ignore")
 }
 
-fn is_inside_package(dep: &str, package: &Option<String>) -> bool {
-    if package.is_none() { return dep.chars().next().unwrap() != '@'; }
-    dep.starts_with(package.as_ref().unwrap())
+fn is_inside_package(dep: &str, packages: &Vec<String>) -> bool {
+    if dep.chars().next().unwrap() == '@' { return false; }
+    packages
+        .iter()
+        .map(String::as_str)
+        .find(|package| {
+            dep.starts_with(package)
+        })
+        .is_some()
 }
 
 fn get_cmake_infos(
@@ -498,7 +508,7 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
                             f,
                             "    {}${{CMAKE_CURRENT_LIST_DIR}}/{}",
                             if lib.link_whole
-                                || args.additional_allwayslinks.contains(&info.label)
+                                || args.additional_always_links.contains(&info.label)
                                 { link_whole_str(args) }
                             else { " "},
                             lib_name
@@ -625,7 +635,7 @@ fn gen_libs(cmake_dir: &str, infos: Vec<CmakeInfo>, args: &Args, bazel_info: &Ba
             if !is_interface {
                 if label.repo.is_some() {
                     let repo = label.repo.as_ref().unwrap();
-                    let mapping = args.repo_path_mappings.get(repo);
+                    let mapping = args.repo_path_mapping.get(repo);
                     if mapping.is_some() {
                         let mapping = mapping.unwrap();
                         for s in info.hdrs
@@ -689,15 +699,16 @@ fn write_all(includes: Vec<String>, workspace_dir: &str, to: PathBuf) -> Result<
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Args {
-    package: Option<String>,
-    name: String,
+    target_dir: String,
+    query_packages: Vec<String>,
     config: Option<String>,
     additional_build_args: Vec<String>,
     link_static: bool,
     compile_external: Vec<String>,
-    additional_allwayslinks: HashSet<String>,
-    repo_path_mappings: HashMap<String, String>,
+    additional_always_links: HashSet<String>,
+    repo_path_mapping: HashMap<String, String>,
 }
 
 fn main() -> Result<()> {
@@ -705,56 +716,15 @@ fn main() -> Result<()> {
     env::set_current_dir(&workspace_dir)?;
 
     let mut args = pico_args::Arguments::from_env();
+    let args_json_path: String = args.value_from_str("-a")?;
+    let args_json_file = fs::File::open(args_json_path)?;
+    let args_json_reader = BufReader::new(args_json_file);
+    let mut args_json_de = serde_json::Deserializer::from_reader(args_json_reader);
+    let mut args = Args::deserialize(&mut args_json_de)?;
+    args.query_packages = args.query_packages.into_iter().map(|x| unwrap_package(&x)).collect();
 
-    let additional_build_args: Option<String> = args.opt_value_from_str("-b")?;
-    let compile_external: Option<String> = args.opt_value_from_str("-e")?;
-    let additional_allwayslinks: Option<String> = args.opt_value_from_str("-a")?;
-    let repo_path_mappings: Option<String> =  args.opt_value_from_str("-m")?;
-
-    let args = Args {
-        package: args.opt_value_from_str("-p")?,
-        name: args.value_from_str("-n")?,
-        config: args.opt_value_from_str("-c")?,
-        additional_build_args: additional_build_args
-            .map(|x| {
-                x.split(',')
-                    .map(str::to_owned)
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or(Vec::new()),
-        link_static: args.value_from_str("-l")?,
-        compile_external: compile_external
-            .map(|x| {
-                x.split(',')
-                    .map(str::to_owned)
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or(Vec::new()),
-        additional_allwayslinks: additional_allwayslinks
-            .map(|x| {
-                x.split(',')
-                    .map(str::to_owned)
-                    .collect::<HashSet<String>>()
-            })
-            .unwrap_or(HashSet::new()),
-        repo_path_mappings: repo_path_mappings
-            .map(|x| {
-                x.split(',')
-                    .map(|x| x.split(':'))
-                    .map(|mut x| ( x.next().unwrap().to_owned(), x.next().unwrap().to_owned() ))
-                    .collect::<HashMap<String, String>>()
-            })
-            .unwrap_or(HashMap::new()),
-    };
     let bazel_info = get_bazel_info(&args)?;
-
-    let package_dir = if args.package.is_none() {
-        workspace_dir.clone()
-    } else {
-        format!("{}/{}", &workspace_dir, args.package.as_ref().unwrap())
-    };
-
-    let cmake_dir = format!("{}/{}", &package_dir, &args.name);
+    let cmake_dir = format!("{}/{}", &workspace_dir, &args.target_dir);
 
     if fs::metadata(&cmake_dir).is_ok() {
         fs::remove_dir_all(&cmake_dir)?;
@@ -764,7 +734,7 @@ fn main() -> Result<()> {
     let targets_deps = query_cc_targets_deps(&args)?;
     let (deps_infos, compile_external): (Vec<_>, Vec<_>) =  get_cmake_infos(&targets_deps, &args, &bazel_info)?
         .into_iter()
-        .filter(|x| is_ignored(x) || !is_inside_package(&x.label, &args.package))
+        .filter(|x| is_ignored(x) || !is_inside_package(&x.label, &args.query_packages))
         .partition(|x| {
             for e in &args.compile_external {
                 if x.label.starts_with(e) {
