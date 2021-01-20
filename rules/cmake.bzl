@@ -57,7 +57,7 @@ _cmake_gen = rule(
 
 def cmake_gen(
     name,
-    query_packages = [ "" ],
+    query_packages = [],
     config = None,
     additional_build_args = [],
     link_static = True,
@@ -73,6 +73,9 @@ def cmake_gen(
         )
     else:
         target_dir = name
+
+    if not query_packages:
+        query_packages = [ package_name ]
 
     _cmake_gen(
         name = name,
