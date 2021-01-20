@@ -134,12 +134,22 @@ fn unwrap_package(pkg: &str) -> String {
     }
 }
 
+fn package_wildcard(package: &str) -> String {
+    if package.is_empty() {
+        "//...".to_owned()
+    } else if package.chars().last().unwrap() == '/' {
+        format!("{}...", package)
+    } else {
+        format!("{}/...", package)
+    }
+}
+
 fn query_cc_targets(args: &Args) -> Result<HashSet<String>> {
     let lookup = args.query_packages
         .iter()
         .map(|package| ["cc_library", "cc_binary", "cc_test"]
             .iter()
-            .map(|x| format!("kind({}, {}/...)", x, package))
+            .map(|x| format!("kind({}, {})", x, package_wildcard(package)))
             .collect::<Vec<String>>()
             .join("+")
         )
@@ -152,7 +162,7 @@ fn query_cc_targets(args: &Args) -> Result<HashSet<String>> {
 fn query_cc_targets_deps(args: &Args) -> Result<HashSet<String>> {
     let lookup = args.query_packages
         .iter()
-        .map(|package| format!("kind(cc_library, deps({}/...))", package))
+        .map(|package| format!("kind(cc_library, deps({}))", package_wildcard(package)))
         .collect::<Vec<String>>()
         .join(" + ");
 
